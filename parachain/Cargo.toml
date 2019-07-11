@@ -19,6 +19,7 @@ log = { version = "0.4.6", optional = true }
 
 [dev-dependencies]
 tiny-keccak = "1.4"
+adder = { path = "../test-parachains/adder" }
 
 [features]
 default = ["std"]

@@ -33,11 +33,14 @@ use shared_memory::{SharedMem, SharedMemConf, EventState, WriteLockable, EventWa
 use parking_lot::Mutex;
 use log::{trace, debug};
 
-// maximum memory in bytes
+// Maximum validation data memory/size in bytes.
 const MAX_RUNTIME_MEM: usize = 1024 * 1024 * 1024; // 1 GiB
+// Maximum code size in bytes.
 const MAX_CODE_MEM: usize = 16 * 1024 * 1024; // 16 MiB
-// Message data limit
+// Message data limit in bytes.
 const MAX_MESSAGE_MEM: usize = 16 * 1024 * 1024; // 16 MiB
+// Validation timeout in seconds
+const VALIDATION_TIMEOUT_SEC: usize = 5;
 
 const WORKER_ARGS_TEST: &[&'static str] = &["--nocapture", "validation_worker"];
 const WORKER_ARGS: &[&'static str] = &["--validation-worker"];
@@ -282,15 +285,16 @@ impl<'a, E: 'a + Externalities> Externals for ValidationExternals<'a, E> {
 	}
 }
 
-/// Params header in shared memory. All offsets should be aligned to WASM page size.
+/// Params header in shared memory.
 #[derive(Encode, Decode, Debug)]
-pub struct ValidationHeader {
+struct ValidationHeader {
 	pub code_size: u64,
 	pub params_size: u64,
 }
 
 #[derive(Encode, Decode, Debug)]
-pub enum ValidationResultHeader {
+/// Validation result header passed from worker to host.
+enum ValidationResultHeader {
 	Ok {
 		result: ValidationResult,
 		egress_message_count: u64,
@@ -298,7 +302,6 @@ pub enum ValidationResultHeader {
 	},
 	Error(String),
 }
-
 
 #[derive(Default)]
 struct WorkerExternalities {
@@ -420,13 +423,13 @@ pub fn run_worker(mem_id: &str) -> Result<(), String> {
 	Ok(())
 }
 
+// This should be fine since access to `ValidationHost` is synchonized with an additional mutex.
 unsafe impl Send for ValidationHost {}
 
 struct ValidationHost {
 	worker: Option<process::Child>,
 	memory: Option<SharedMem>,
 }
-
 
 impl Drop for ValidationHost {
 	fn drop(&mut self) {
@@ -475,14 +478,11 @@ impl ValidationHost {
 			.spawn()?;
 		self.worker = Some(worker);
 
-		memory.wait(EVENT_WORKER_READY, shared_memory::Timeout::Sec(5))?;
+		memory.wait(EVENT_WORKER_READY, shared_memory::Timeout::Sec(VALIDATION_TIMEOUT_SEC))?;
 		self.memory = Some(memory);
 		Ok(())
 	}
 
-	/// Validate a candidate under the given validation code.
-	///
-	/// This will fail if the validation code is not a proper parachain validation module.
 	fn validate_candidate<E: Externalities>(
 		&mut self,
 		validation_code: &[u8],
@@ -569,8 +569,7 @@ impl ValidationHost {
 }
 
 /// Validate a candidate under the given validation code.
-///
-/// This will fail if the validation code is not a proper parachain validation module.
+/// Depending on `option` this
 pub fn validate_candidate<E: Externalities>(
 	validation_code: &[u8],
 	params: ValidationParams,
